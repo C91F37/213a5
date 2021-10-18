@@ -119,10 +119,14 @@ static int is_within_heap_range(struct myheap *h, void *addr) {
  * the coalesced block.
  */
 static void *coalesce(struct myheap *h, void *first_block_start) {
-  if (!block_is_in_use(first_block_start)) {
-    if (!is_last_block(h, first_block_start) && !block_is_in_use(get_next_block(first_block_start))) {
-      set_block_header(first_block_start, get_block_size(first_block_start)+get_block_size(get_next_block(first_block_start)), 0);
-    }
+  int is_curr_block_free = !block_is_in_use(first_block_start);
+  int is_not_last_block = !is_last_block(h, first_block_start);
+  int is_next_block_free = !block_is_in_use(get_next_block(first_block_start));
+
+  if (is_curr_block_free && is_not_last_block && is_next_block_free) {
+    void *next_block = get_next_block(first_block_start);
+    int new_size = get_block_size(first_block_start) + get_block_size(next_block);
+    set_block_header(first_block_start, new_size, 0);
   }
   return first_block_start;
 }
@@ -134,10 +138,8 @@ static void *coalesce(struct myheap *h, void *first_block_start) {
  * of HEADER_SIZE.
  */
 static int get_size_to_allocate(int user_size) {
-  while (user_size % 8 != 0) {
-    user_size += 1;
-  }
-  return user_size + 2*HEADER_SIZE;
+  int aligment_padding = HEADER_SIZE - (user_size % HEADER_SIZE);
+  return user_size + aligment_padding + 2*HEADER_SIZE;
 }
 
 /*
@@ -153,12 +155,14 @@ static void *split_and_mark_used(struct myheap *h, void *block_start, int needed
   int ns = get_size_to_allocate(needed_size);
   int current_block_size = get_block_size(block_start);
   int remaining_size = current_block_size - ns;
+  
   if (remaining_size >= 3*HEADER_SIZE) {
     set_block_header(block_start, ns, 1);
     set_block_header(get_next_block(block_start), remaining_size, 0);
   } else {
     set_block_header(block_start, current_block_size, 1);
   }
+  
   return get_payload(block_start);
 }
 
@@ -187,27 +191,32 @@ struct myheap *heap_create(unsigned int size)
  * block with the previous and the next block, if they are also free.
  */
 void myheap_free(struct myheap *h, void *payload) {
-  void * this_start = get_block_start(payload);
-  set_block_header(this_start, get_block_size(this_start), 0);
-
+  void *this_start = get_block_start(payload);
+  int block_size = get_block_size(this_start);
+  set_block_header(this_start, block_size, 0);
+  
   coalesce(h, this_start);
+  
   if (!is_first_block(h, this_start)) {
       coalesce(h, get_previous_block(this_start));
   };
 }
 
 /*
- * Malloc a block on the heap h. 
- * Return a pointer to the block's payload in case of success, 
+ * Malloc a block on the heap h.
+ * Return a pointer to the block's payload in case of success,
  * or NULL if no block large enough to satisfy the request exists.
  */
 void *myheap_malloc(struct myheap *h, unsigned int user_size) {
   void *current_pos = h->start;
+  int needed_size = get_size_to_allocate(user_size);
   while (!is_last_block(h, current_pos)) {
-    if (get_size_to_allocate(user_size) <= get_block_size(current_pos) && !block_is_in_use(current_pos)) {
-      return split_and_mark_used(h, current_pos, user_size); 
+    if (needed_size <= get_block_size(current_pos) && !block_is_in_use(current_pos)) {
+      return split_and_mark_used(h, current_pos, user_size);
     }
     current_pos = get_next_block(current_pos);
   }
-  return get_size_to_allocate(user_size) <= get_block_size(current_pos) ? split_and_mark_used(h, current_pos, user_size) : NULL;
+  return needed_size <= get_block_size(current_pos)
+    ? split_and_mark_used(h, current_pos, user_size)
+    : NULL;
 }
